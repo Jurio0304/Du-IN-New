@@ -6,15 +6,18 @@ Created on 17:28, Jan. 20th, 2024
 """
 import torch
 import torch.nn as nn
+
 # local dep
 if __name__ == "__main__":
     import os, sys
+
     sys.path.insert(0, os.path.join(os.pardir, os.pardir, os.pardir))
 import utils.model.torch
 
 __all__ = [
     "ContrastiveBlock",
 ]
+
 
 # def ContrastiveBlock class
 class ContrastiveBlock(nn.Module):
@@ -44,14 +47,18 @@ class ContrastiveBlock(nn.Module):
         assert loss_mode in ["clip", "clip_orig", "unicl"], (
             "ERROR: Unknown loss mode {} in layers.ContrastiveBlock."
         ).format(loss_mode)
-        self.d_model = d_model; self.d_contra = d_contra; self.loss_mode = loss_mode
+        self.d_model = d_model
+        self.d_contra = d_contra;
+        self.loss_mode = loss_mode
 
         # Initialize variables.
-        self._init_model(); self._init_weight()
+        self._init_model();
+        self._init_weight()
 
     """
     init funcs
     """
+
     # def _init_model func
     def _init_model(self):
         """
@@ -117,6 +124,7 @@ class ContrastiveBlock(nn.Module):
     """
     network funcs
     """
+
     # def forward func
     def forward(self, inputs):
         """
@@ -131,7 +139,9 @@ class ContrastiveBlock(nn.Module):
         """
         # Initialize `Z` & `Y` from `inputs`.
         # [Z,Y] - (batch_size, *, d_model), label - (batch_size, n_labels)
-        X_f, y_true = inputs; Z, Y = X_f; label_z, label_y = y_true
+        X_f, y_true = inputs;
+        Z, Y = X_f;
+        label_z, label_y = y_true
         # Use `proj_*` layers to get the embedding.
         # emb_[z,y] - (batch_size, ? * d_contra)
         emb_z = utils.model.torch.normalize(self.proj_z(Z), p=2., dim=-1, eps=1e-12)
@@ -140,7 +150,7 @@ class ContrastiveBlock(nn.Module):
         if self.loss_mode == "clip":
             # Calculate `loss_matrix` from `emb_z` and `emb_y`.
             # loss_matrix - (batch_size, batch_size)
-            loss_matrix = torch.exp(torch.matmul(emb_z, torch.permute(emb_y, dims=[1,0])) / self.tau)
+            loss_matrix = torch.exp(torch.matmul(emb_z, torch.permute(emb_y, dims=[1, 0])) / self.tau)
             # Calculate `loss_z` & `loss_y` from `loss_matrix`, which is `z`x`y`.
             # loss_[z,y] - (batch_size,), loss - torch.float32
             labels = torch.eye(loss_matrix.shape[0], dtype=loss_matrix.dtype)
@@ -156,7 +166,7 @@ class ContrastiveBlock(nn.Module):
         elif self.loss_mode == "clip_orig":
             # Calculate `loss_matrix` from `emb_z` and `emb_y`.
             # loss_matrix - (batch_size, batch_size)
-            loss_matrix = torch.matmul(emb_z, torch.permute(emb_y, dims=[1,0])) * torch.exp(self.t)
+            loss_matrix = torch.matmul(emb_z, torch.permute(emb_y, dims=[1, 0])) * torch.exp(self.t)
             # Calculate `loss_z` & `loss_y` from `loss_matrix`, which is `z`x`y`.
             # loss_[z,y] - (batch_size,), loss - torch.float32
             labels = torch.eye(loss_matrix.shape[0], dtype=loss_matrix.dtype)
@@ -166,24 +176,30 @@ class ContrastiveBlock(nn.Module):
         elif self.loss_mode == "unicl":
             # Calculate `loss_matrix` from `emb_z` and `emb_y`.
             # loss_matrix - (batch_size, batch_size)
-            loss_matrix = torch.matmul(emb_z, torch.permute(emb_y, dims=[1,0])) * torch.exp(self.t)
+            loss_matrix = torch.matmul(emb_z, torch.permute(emb_y, dims=[1, 0])) * torch.exp(self.t)
             # Construct `labels` according to one-hot `labels`.
             # labels - (batch_size, batch_size)
-            labels = torch.matmul(label_z, torch.permute(label_y, dims=[1,0]))
+            labels = torch.matmul(label_z, torch.permute(label_y, dims=[1, 0]))
             # Calculate `loss_z` & `loss_y` from `loss_matrix`, which is `z`x`y`.
             # loss_[z,y] - (batch_size,), loss - torch.float32
+            # loss_z = loss_y
             loss_z = utils.model.torch.cross_entropy(logits=loss_matrix, target=labels, dim=-1)
             loss_y = utils.model.torch.cross_entropy(logits=loss_matrix, target=labels, dim=0)
             loss = (torch.mean(loss_z) + torch.mean(loss_y)) / 2
         # Return the final `loss` & `prob_matrix`.
         return loss, loss_matrix
 
+
 if __name__ == "__main__":
     import numpy as np
 
     # Initialize macros.
-    batch_size = 32; emb_len = 20; d_model = 128; n_labels = 10
-    d_contra = 32; loss_mode = ["clip", "clip_orig", "unicl"][-1]
+    batch_size = 32;
+    emb_len = 20;
+    d_model = 128;
+    n_labels = 10
+    d_contra = 32;
+    loss_mode = ["clip", "clip_orig", "unicl"][-1]
 
     # Initialize input `X_f` (including `Z` & `Y`) and `y_true` (including `label_z` & `label_y`).
     # [Z,Y] - (batch_size, emb_len, d_model)
@@ -197,4 +213,3 @@ if __name__ == "__main__":
     # Forward layers in `cb_inst`.
     # loss - torch.float32, prob_matrix - (batch_size, batch_size)
     loss, prob_matrix = cb_inst(((Z, Y), (label_z, label_y)))
-

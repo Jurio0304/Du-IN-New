@@ -4,10 +4,12 @@ Created on 21:35, Jan. 21st, 2024
 
 @author: Norbert Zheng
 """
-import torch
 import copy as cp
+
 import numpy as np
+import torch
 import torch.nn as nn
+
 # local dep
 if __name__ == "__main__":
     import os, sys
@@ -486,7 +488,8 @@ class LabelCLSHead(nn.Module):
         self.params = cp.deepcopy(params)
 
         # Initialize variables.
-        self._init_model(); self._init_weight()
+        self._init_model()
+        self._init_weight()
 
     """
     init funcs

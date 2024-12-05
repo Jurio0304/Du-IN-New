@@ -1,4 +1,4 @@
-name: brain2vec-torch
+name: py311_BTW
 channels:
   - defaults
 dependencies:

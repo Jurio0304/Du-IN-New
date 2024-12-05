@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """
-Created on 22:45, Jan. 21st, 2024
+Created on 13:10, Dec. 13th, 2022
 
-@author: Norbert Zheng
+Evaluate the `duin_cls` model.
+
+@Author: Jurio
 """
+
 import argparse
 import copy as cp
 import time
@@ -22,7 +25,7 @@ if __name__ == "__main__":
 import utils
 import utils.model.torch
 import utils.data.seeg
-from utils.data import load_pickle
+from utils.data import load_pickle, save_pickle
 from models.duin import duin_cls as duin_model
 
 __all__ = [
@@ -462,7 +465,9 @@ train funcs
 # def train func
 def train():
     """
-    Train the model.
+    Evaluate the `duin_cls` model.
+    1. Get embeddings
+    2. Get classification confusion matrix
 
     Args:
         None
@@ -475,7 +480,6 @@ def train():
     # Initialize the path of pretrained checkpoint.
     path_pt_ckpt = params.train.pt_ckpt + 'model/checkpoint-399.pth' if params.train.pt_ckpt is not None else None
     path_pt_params = params.train.pt_ckpt + 'save/params' if params.train.pt_ckpt is not None else None
-
     # Load `n_subjects` & `n_channels` from `path_pt_params`.
     if path_pt_params is not None:
         params_pt = load_pickle(path_pt_params)
@@ -486,7 +490,7 @@ def train():
         n_subjects = None
         n_channels = None
     # Log the start of current training process.
-    paths.run.logger.summaries.info("Training started with dataset {}.".format(params.train.dataset))
+    paths.run.logger.summaries.info("Evaluation started with dataset {}.".format(params.train.dataset))
     # Initialize model device.
     params.model.device = torch.device("cuda:{:d}".format(0)) if torch.cuda.is_available() else torch.device("cpu")
     print(params.model.device)
@@ -566,9 +570,9 @@ def train():
     elif params.train.dataset == "eeg_zhou2023cibr":
         # Initialize the configurations of subjects that we want to execute experiments.
         subjs_cfg = [
-            #utils.DotDict({
+            # utils.DotDict({
             #    "name": "021", "path": os.path.join(paths.base, "data", "eeg.zhou2023cibr", "021", "20230407"),
-            #}),
+            # }),
             utils.DotDict({
                 "name": "023", "path": os.path.join(paths.base, "data", "eeg.zhou2023cibr", "023", "20230412"),
             }),
@@ -603,7 +607,7 @@ def train():
         load_params_i.subjs_cfg = subjs_cfg
         # Log the start of current training iteration.
         msg = (
-            "Training started with experiment {} with {:d} subjects."
+            "Evaluation started with experiment {} with {:d} subjects."
         ).format(load_params_i.name, len(load_params_i.subjs_cfg))
         print(msg)
         paths.run.logger.summaries.info(msg)
@@ -618,18 +622,26 @@ def train():
         params.iteration(iteration=0)
         # Initialize model of current time segment.
         model = duin_model(params.model)
-        if path_pt_ckpt is not None:
-            model.load_weight(path_pt_ckpt, device=params.model.device)
-        msg = f'Model loaded from {path_pt_ckpt}'
+        if path_best_model is not None:
+            model.load_state_dict(torch.load(path_best_model + 'best.pth',
+                                             map_location=params.model.device))
+        msg = f'Model loaded from {path_best_model}'
         print(msg)
         paths.run.logger.summaries.info(msg)
 
         model = model.to(device=params.model.device)
-        if params.train.use_graph_mode: model = torch.compile(model)
+        if params.train.use_graph_mode:
+            model = torch.compile(model)
         # Make an ADAM optimizer for model.
         optim_cfg = utils.DotDict({"name": "adamw", "lr": params.train.lr_i, "weight_decay": 0.05, })
         optimizer = utils.model.torch.create_optimizer(cfg=optim_cfg, model=model)
-        for epoch_idx in range(params.train.n_epochs):
+
+        # Save the y_pred, embed, y_true for each batch
+        y_pred_train, y_pred_valid, y_pred_test = [], [], []
+        embed_train, embed_valid, embed_test = [], [], []
+        y_true_train, y_true_valid, y_true_test = [], [], []
+
+        for epoch_idx in range(1):
             # Summarize model information.
             if epoch_idx == 0:
                 msg = summary(model, col_names=("num_params", "params_percent", "trainable",))
@@ -641,9 +653,7 @@ def train():
             for param_group_i in optimizer.param_groups: param_group_i["lr"] = params.train.lr_i
             # Record the start time of preparing data.
             time_start = time.time()
-            # Prepare for model train process.
-            accuracy_train = []
-            loss_train = utils.DotDict()
+
             # Execute train process.
             for train_batch in dataset_train:
                 # Initialize `batch_i` from `train_batch`.
@@ -654,41 +664,33 @@ def train():
                 ]
                 # Get the number of current `batch_i`.
                 batch_size_i = len(batch_i[0].detach().cpu().numpy())
-                # Train model for current batch.
-                y_pred_i, loss_i = _train(batch_i)
+                # Evaluation model for current batch.
+                # y_pred_i, loss_i = _train(batch_i)
+                y_pred_i, embed_i = _forward_for_embed(batch_i)
+
                 # Numpy the outputs of current batch.
                 y_pred_i = y_pred_i.detach().cpu().numpy()
+                y_pred_i = np.argmax(y_pred_i, axis=-1)
                 y_true_i = batch_i[1].detach().cpu().numpy()
-                for key_i in utils.DotDict.iter_keys(loss_i):
-                    utils.DotDict.iter_setattr(loss_i, key_i,
-                                               utils.DotDict.iter_getattr(loss_i, key_i).detach().cpu().numpy())
-                # Record information related to current batch.
-                accuracy_i = np.stack([
-                    (np.argmax(y_pred_i, axis=-1) == np.argmax(batch_i[1].detach().cpu().numpy(), axis=-1)).astype(
-                        np.int64),
-                    np.argmax(batch_i[2].detach().cpu().numpy(), axis=-1).astype(np.int64),
-                ], axis=0).T
-                accuracy_train.append(accuracy_i)
-                cross_entropy_i = cal_cross_entropy(y_pred_i, y_true_i)
-                loss_i.total = loss_i.cls = cross_entropy_i
-                for key_i, item_i in loss_i.items():
-                    if hasattr(loss_train, key_i):
-                        loss_train[key_i].append(np.array([item_i, batch_size_i], dtype=np.float32))
-                    else:
-                        loss_train[key_i] = [np.array([item_i, batch_size_i], dtype=np.float32), ]
-            # Record information related to train process.
-            accuracy_train = np.concatenate(accuracy_train, axis=0)
-            accuracy_train = np.array([accuracy_train[np.where(accuracy_train[:, 1] == subj_idx), 0].mean() \
-                                       for subj_idx in sorted(set(accuracy_train[:, 1]))], dtype=np.float32)
-            for key_i, item_i in loss_train.items():
-                # Calculate the averaged loss item.
-                item_i = np.stack(item_i, axis=0)
-                item_i = np.sum(item_i[:, 0] * item_i[:, 1]) / np.sum(item_i[:, 1])
-                # Wrtie loss item back to storation for current epoch.
-                loss_train[key_i] = item_i
-            # Prepare for model validation process.
-            accuracy_validation = []
-            loss_validation = utils.DotDict()
+                y_true_i = np.argmax(y_true_i, axis=-1)
+                embed_i = embed_i.detach().cpu().numpy()
+
+                # Append the y_pred, embed, y_true for each batch
+                y_pred_train.append(y_pred_i)
+                embed_train.append(embed_i)
+                y_true_train.append(y_true_i)
+
+            # Calculate the accuracy
+            y_pred_train, y_true_train, embed_train = (
+                np.hstack(y_pred_train), np.hstack(y_true_train), np.vstack(embed_train))
+            accuracy_train = np.mean(y_pred_train == y_true_train)
+            print(f'Accuracy on train data: {accuracy_train:.4f}')
+
+            time_train = time.time()
+            msg = f'Evaluating train data finished in {time_train - time_start:.2f} seconds.'
+            print(msg)
+            paths.run.logger.summaries.info(msg)
+
             # Execute validation process.
             for validation_batch in dataset_validation:
                 # Initialize `batch_i` from `validation_batch`.
@@ -700,42 +702,31 @@ def train():
                 # Get the number of current `batch_i`.
                 batch_size_i = len(batch_i[0].detach().cpu().numpy())
                 # Validate model for current batch.
-                y_pred_i, loss_i = _forward(batch_i)
+                y_pred_i, embed_i = _forward_for_embed(batch_i)
+
                 # Numpy the outputs of current batch.
                 y_pred_i = y_pred_i.detach().cpu().numpy()
+                y_pred_i = np.argmax(y_pred_i, axis=-1)
                 y_true_i = batch_i[1].detach().cpu().numpy()
-                for key_i in utils.DotDict.iter_keys(loss_i):
-                    utils.DotDict.iter_setattr(loss_i, key_i,
-                                               utils.DotDict.iter_getattr(loss_i, key_i).detach().cpu().numpy())
-                # Record information related to current batch.
-                accuracy_i = np.stack([
-                    (np.argmax(y_pred_i, axis=-1) == np.argmax(batch_i[1].detach().cpu().numpy(), axis=-1)).astype(
-                        np.int64),
-                    np.argmax(batch_i[2].detach().cpu().numpy(), axis=-1).astype(np.int64),
-                ], axis=0).T
-                accuracy_validation.append(accuracy_i)
-                cross_entropy_i = cal_cross_entropy(y_pred_i, y_true_i)
-                loss_i.total = loss_i.cls = cross_entropy_i
-                for key_i, item_i in loss_i.items():
-                    if hasattr(loss_validation, key_i):
-                        loss_validation[key_i].append(np.array([item_i, batch_size_i], dtype=np.float32))
-                    else:
-                        loss_validation[key_i] = [np.array([item_i, batch_size_i], dtype=np.float32), ]
-            # Record information related to validation process.
-            accuracy_validation = np.concatenate(accuracy_validation, axis=0)
-            accuracy_validation = np.array(
-                [accuracy_validation[np.where(accuracy_validation[:, 1] == subj_idx), 0].mean() \
-                 for subj_idx in sorted(set(accuracy_validation[:, 1]))], dtype=np.float32)
-            for key_i, item_i in loss_validation.items():
-                # Calculate the averaged loss item.
-                item_i = np.stack(item_i, axis=0)
-                item_i = np.sum(item_i[:, 0] * item_i[:, 1]) / np.sum(item_i[:, 1])
-                # Wrtie loss item back to storation for current epoch.
-                loss_validation[key_i] = item_i
-            accuracies_validation.append(accuracy_validation)
-            # Prepare for model test process.
-            accuracy_test = []
-            loss_test = utils.DotDict()
+                y_true_i = np.argmax(y_true_i, axis=-1)
+                embed_i = embed_i.detach().cpu().numpy()
+
+                # Append the y_pred, embed, y_true for each batch
+                y_pred_valid.append(y_pred_i)
+                embed_valid.append(embed_i)
+                y_true_valid.append(y_true_i)
+
+            # Calculate the accuracy
+            y_pred_valid, y_true_valid, embed_valid = (
+                np.hstack(y_pred_valid), np.hstack(y_true_valid), np.vstack(embed_valid))
+            accuracy_valid = np.mean(y_pred_valid == y_true_valid)
+            print(f'Accuracy on valid data: {accuracy_valid:.4f}')
+
+            time_valid = time.time()
+            msg = f'Evaluating valid data finished in {time_valid - time_train:.2f} seconds.'
+            print(msg)
+            paths.run.logger.summaries.info(msg)
+
             # Execute test process.
             for test_batch in dataset_test:
                 # Initialize `batch_i` from `test_batch`.
@@ -747,39 +738,31 @@ def train():
                 # Get the number of current `batch_i`.
                 batch_size_i = len(batch_i[0].detach().cpu().numpy())
                 # Test model for current batch.
-                y_pred_i, loss_i = _forward(batch_i)
+                y_pred_i, embed_i = _forward_for_embed(batch_i)
+
                 # Numpy the outputs of current batch.
                 y_pred_i = y_pred_i.detach().cpu().numpy()
+                y_pred_i = np.argmax(y_pred_i, axis=-1)
                 y_true_i = batch_i[1].detach().cpu().numpy()
-                for key_i in utils.DotDict.iter_keys(loss_i):
-                    utils.DotDict.iter_setattr(loss_i, key_i,
-                                               utils.DotDict.iter_getattr(loss_i, key_i).detach().cpu().numpy())
-                # Record information related to current batch.
-                accuracy_i = np.stack([
-                    (np.argmax(y_pred_i, axis=-1) == np.argmax(batch_i[1].detach().cpu().numpy(), axis=-1)).astype(
-                        np.int64),
-                    np.argmax(batch_i[2].detach().cpu().numpy(), axis=-1).astype(np.int64),
-                ], axis=0).T
-                accuracy_test.append(accuracy_i)
-                cross_entropy_i = cal_cross_entropy(y_pred_i, y_true_i)
-                loss_i.total = loss_i.cls = cross_entropy_i
-                for key_i, item_i in loss_i.items():
-                    if hasattr(loss_test, key_i):
-                        loss_test[key_i].append(np.array([item_i, batch_size_i], dtype=np.float32))
-                    else:
-                        loss_test[key_i] = [np.array([item_i, batch_size_i], dtype=np.float32), ]
-            # Record information related to test process.
-            accuracy_test = np.concatenate(accuracy_test, axis=0)
-            accuracy_test = np.array([accuracy_test[np.where(accuracy_test[:, 1] == subj_idx), 0].mean() \
-                                      for subj_idx in sorted(set(accuracy_test[:, 1]))], dtype=np.float32)
-            for key_i, item_i in loss_test.items():
-                # Calculate the averaged loss item.
-                item_i = np.stack(item_i, axis=0)
-                item_i = np.sum(item_i[:, 0] * item_i[:, 1]) / np.sum(item_i[:, 1])
-                # Wrtie loss item back to storation for current epoch.
-                loss_test[key_i] = item_i
-            accuracies_test.append(accuracy_test)
-            ## Write progress to summaries.
+                y_true_i = np.argmax(y_true_i, axis=-1)
+                embed_i = embed_i.detach().cpu().numpy()
+
+                # Append the y_pred, embed, y_true for each batch
+                y_pred_test.append(y_pred_i)
+                embed_test.append(embed_i)
+                y_true_test.append(y_true_i)
+
+            # Calculate the accuracy
+            y_pred_test, y_true_test, embed_test = (
+                np.hstack(y_pred_test), np.hstack(y_true_test), np.vstack(embed_test))
+            accuracy_test = np.mean(y_pred_test == y_true_test)
+            print(f'Accuracy on test data: {accuracy_test:.4f}')
+
+            time_test = time.time()
+            msg = f'Evaluating test data finished in {time_test - time_valid:.2f} seconds.'
+            print(msg)
+            paths.run.logger.summaries.info(msg)
+
             # Log information related to current training epoch.
             time_stop = time.time()
 
@@ -788,131 +771,27 @@ def train():
             print(msg)
             paths.run.logger.summaries.info(msg)
             paths.run.logger.summaries.info(msg)
-            msg = (
-                "Finish train epoch {:d} in {:.2f} seconds."
-            ).format(epoch_idx, time_stop - time_start)
+            msg = "Finish evaluation in {:.2f} seconds.".format(time_stop - time_start)
             print(msg)
             paths.run.logger.summaries.info(msg)
-            # Log information related to train process.
-            msg = "Accuracy(train): [{:.2f}%".format(accuracy_train[0] * 100.)
-            for subj_idx in range(1, len(accuracy_train)): msg += ",{:.2f}%".format(accuracy_train[subj_idx] * 100.)
-            msg += "].\n"
-            loss_keys = list(loss_train.keys())
-            msg += "Loss(train): {:.5f} ({})".format(loss_train[loss_keys[0]], loss_keys[0])
-            for loss_idx in range(1, len(loss_keys)):
-                msg += " {:.5f} ({})".format(loss_train[loss_keys[loss_idx]], loss_keys[loss_idx])
-            print(msg)
-            paths.run.logger.summaries.info(msg)
-            # Log information related to validation process.
-            msg = "Accuracy(validation): [{:.2f}%".format(accuracy_validation[0] * 100.)
-            for subj_idx in range(1, len(accuracy_validation)): msg += ",{:.2f}%".format(
-                accuracy_validation[subj_idx] * 100.)
-            msg += "].\n"
-            loss_keys = list(loss_validation.keys())
-            msg += "Loss(validation): {:.5f} ({})".format(loss_validation[loss_keys[0]], loss_keys[0])
-            for loss_idx in range(1, len(loss_keys)):
-                msg += " {:.5f} ({})".format(loss_validation[loss_keys[loss_idx]], loss_keys[loss_idx])
-            print(msg)
-            paths.run.logger.summaries.info(msg)
-            # Log information related to test process.
-            msg = "Accuracy(test): [{:.2f}%".format(accuracy_test[0] * 100.)
-            for subj_idx in range(1, len(accuracy_test)): msg += ",{:.2f}%".format(accuracy_test[subj_idx] * 100.)
-            msg += "].\n"
-            loss_keys = list(loss_test.keys())
-            msg += "Loss(test): {:.5f} ({})".format(loss_test[loss_keys[0]], loss_keys[0])
-            for loss_idx in range(1, len(loss_keys)):
-                msg += " {:.5f} ({})".format(loss_test[loss_keys[loss_idx]], loss_keys[loss_idx])
-            print(msg)
-            paths.run.logger.summaries.info(msg)
-            ## Write progress to tensorboard.
-            # Get the pointer of writer.
-            writer = paths.run.logger.tensorboard
-            # Log information related to train process.
-            for key_i, loss_i in loss_train.items():
-                writer.add_scalar(os.path.join("losses", "train", key_i), loss_i, global_step=epoch_idx)
-            for subj_idx, accuracy_i in enumerate(accuracy_train):
-                subj_i = load_params_i.subjs_cfg[subj_idx].name
-                writer.add_scalar(os.path.join("accuracies", "train", subj_i), accuracy_i, global_step=epoch_idx)
-            # Log information related to validation process.
-            for key_i, loss_i in loss_validation.items():
-                writer.add_scalar(os.path.join("losses", "validation", key_i), loss_i, global_step=epoch_idx)
-            for subj_idx, accuracy_i in enumerate(accuracy_validation):
-                subj_i = load_params_i.subjs_cfg[subj_idx].name
-                writer.add_scalar(os.path.join("accuracies", "validation", subj_i), accuracy_i, global_step=epoch_idx)
-            # Log information related to test process.
-            for key_i, loss_i in loss_test.items():
-                writer.add_scalar(os.path.join("losses", "test", key_i), loss_i, global_step=epoch_idx)
-            for subj_idx, accuracy_i in enumerate(accuracy_test):
-                subj_i = load_params_i.subjs_cfg[subj_idx].name
-                writer.add_scalar(os.path.join("accuracies", "test", subj_i), accuracy_i, global_step=epoch_idx)
 
-            # Save the model
-            if (epoch_idx + 1) >= 100:
-                torch.save(model.state_dict(), os.path.join(paths.run.model, f'S{subj_i}_E{epoch_idx + 1:03d}.pth'))
-
-
-        # Log information related to channel weights.
-        # ch_weights - (n_subjects, n_channels)
-        ch_weights = model.get_weight_i().numpy()
-        for subj_idx, subj_cfg_i in enumerate(load_params_i.subjs_cfg):
-            # Initialize `ch_names_i` & `ch_weights_i` according to `subj_idx`.
-            ch_names_i = subj_cfg_i.ch_names
-            ch_weights_i = ch_weights[subj_idx, ...]
-            # Note: Only the former part of `ch_weights_i` corresponds to `ch_names_i`.
-            assert len(ch_weights_i.shape) == 1
-            ch_weights_i = ch_weights_i[:len(ch_names_i)]
-            # Get the corresponding channel orders to order channels.
-            ch_orders_i = np.argsort(ch_weights_i)[::-1]
-            # Log information related to weight distributions of top-k channels.
-            top_k = min(10, len(ch_names_i))
-            msg = (
-                "INFO: The top-{:d} channels are {} with weights {}, with channel weight distribution:\n"
-            ).format(top_k, [ch_names_i[ch_orders_i[top_idx]] for top_idx in range(top_k)],
-                     [ch_weights_i[ch_orders_i[top_idx]] for top_idx in range(top_k)])
-            msg += log_distr(ch_weights_i)
-            print(msg)
-            paths.run.logger.summaries.info(msg)
-        # Convert `accuracies_validation` & `accuracies_test` to `np.array`.
-        # accuracies_* - (n_subjects, n_epochs)
-        accuracies_validation = np.round(np.array(accuracies_validation, dtype=np.float32), decimals=4).T
-        accuracies_test = np.round(np.array(accuracies_test, dtype=np.float32), decimals=4).T
-        # epoch_maxacc_idxs - (n_subjects,)
-        epoch_maxacc_idxs = [np.where(
-            accuracies_validation[subj_idx] == np.max(accuracies_validation[subj_idx])
-        )[0] for subj_idx in range(accuracies_validation.shape[0])]
-        epoch_maxacc_idxs = [epoch_maxacc_idxs[subj_idx][
-                                 np.argmax(accuracies_test[subj_idx, epoch_maxacc_idxs[subj_idx]])
-                             ] for subj_idx in range(len(epoch_maxacc_idxs))]
-        # Finish training process of current specified experiment.
-        msg = (
-            "Finish the training process of experiment {}."
-        ).format(load_params_i.name)
-        print(msg)
-        paths.run.logger.summaries.info(msg)
-        assert len(load_params_i.subjs_cfg) == len(epoch_maxacc_idxs)
-        for subj_idx in range(len(load_params_i.subjs_cfg)):
-            # Initialize log information for current subject.
-            subj_i = load_params_i.subjs_cfg[subj_idx].name
-            epoch_maxacc_idx_i = epoch_maxacc_idxs[subj_idx]
-            accuracy_validation_i = accuracies_validation[subj_idx, epoch_maxacc_idx_i]
-            accuracy_test_i = accuracies_test[subj_idx, epoch_maxacc_idx_i]
-            msg = (
-                "For subject {}, we get test-accuracy ({:.2f}%) according to max validation-accuracy ({:.2f}%) at "
-                "epoch {:d}."
-            ).format(subj_i, accuracy_test_i * 100., accuracy_validation_i * 100., epoch_maxacc_idx_i)
-            print(msg)
-            paths.run.logger.summaries.info(msg)
-    # Finish current training process.
-    writer = paths.run.logger.tensorboard
-    writer.close()
-    # Log the end of current training process.
-    msg = "Training finished with dataset {}.".format(params.train.dataset)
-    print(msg)
-    paths.run.logger.summaries.info(msg)
+        # Save the y_pred, embed, y_true in a pickle file
+        decoded = {
+            'y_pred_train': y_pred_train,
+            'embed_train': embed_train,
+            'y_true_train': y_true_train,
+            'y_pred_valid': y_pred_valid,
+            'embed_valid': embed_valid,
+            'y_true_valid': y_true_valid,
+            'y_pred_test': y_pred_test,
+            'embed_test': embed_test,
+            'y_true_test': y_true_test,
+        }
+        save_pickle(obj=decoded, fname=path_best_model + 'decoded.pkl')
 
 
 # def _forward func
-def _forward(inputs):
+def _forward_for_embed(inputs):
     """
     Forward the model using one-step data. Everything entering this function already be a tensor.
 
@@ -921,11 +800,23 @@ def _forward(inputs):
 
     Returns:
         y_pred: (batch_size, n_labels) - The predicted labels.
-        loss: DotDict - The loss dictionary.
+        embed: (batch_size, n_embed) - The extracted embeddings.
     """
     global model
     model.eval()
-    with torch.no_grad(): return model(inputs)
+    with torch.no_grad():
+        # Forward model to get the corresponding outputs.
+        X = inputs[0]
+        y_true = inputs[1]
+        subj_id = inputs[2]
+        X_h = model.subj_block((X, subj_id))
+        T = model.tokenizer(X_h)
+        token_shape = T.shape
+        embed = torch.reshape(T, shape=(token_shape[0], -1, token_shape[-1]))
+        embed = model.encoder(embed)
+        y_pred = model.cls_block(embed)
+
+        return y_pred, embed
 
 
 # def _train func
@@ -1024,12 +915,12 @@ arg funcs
 
 
 # def get_args_parser func
-def get_args_parser():
+def get_args_parser(subj='001'):
     """
     Parse arguments from command line.
 
     Args:
-        None
+        subj: str - The subject id.
 
     Returns:
         parser: object - The initialized argument parser.
@@ -1038,10 +929,12 @@ def get_args_parser():
     parser = argparse.ArgumentParser("DuIN CLS for brain signals", add_help=False)
     # Add training parmaeters.
     parser.add_argument("--seeds", type=int, nargs="+", default=[42, ])
-    parser.add_argument("--subjs", type=str, nargs="+",
-                        default=["001", ])
+    parser.add_argument("--subjs", type=str, nargs="+", default=[subj, ])
     parser.add_argument("--subj_idxs", type=int, nargs="+", default=[0, ])
-    parser.add_argument("--pt_ckpt", type=str, default=None)
+    parser.add_argument("--pt_ckpt", type=str,
+                        default=f'../../pretrains/duin/{subj}/mae/')
+    parser.add_argument("--best_model", type=str,
+                        default=f'../../summaries/duin/{subj}/')
     # Return the final `parser`.
     return parser
 
@@ -1057,8 +950,12 @@ if __name__ == "__main__":
     # Initialize base path.
     base = os.path.join(os.getcwd(), os.pardir, os.pardir)
     # Initialize arguments parser.
-    args_parser = get_args_parser()
+    ########################################
+    subj_eval = '001'  # '001' ~ '012'
+    ########################################
+    args_parser = get_args_parser(subj_eval)
     args = args_parser.parse_args()
+    path_best_model = args.best_model
 
     if args.pt_ckpt is not None:
         # Initialize duin_params.

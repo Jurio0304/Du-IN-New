@@ -4,19 +4,25 @@ Created on 13:10, Dec. 13th, 2022
 
 @author: Norbert Zheng
 """
-import os, shutil
-import fnmatch, datetime
-import logging, pickle
 import copy as cp
+import datetime
+import fnmatch
+import logging
+import os
+import pickle
+import shutil
+
 # local dep
 if __name__ == "__main__":
     import os, sys
+
     sys.path.insert(0, os.path.join(os.pardir, os.pardir))
 from utils import DotDict
 
 __all__ = [
     "Paths",
 ]
+
 
 class Paths:
     """
@@ -35,14 +41,14 @@ class Paths:
 
         ## Initialize variables.
         # Initialize data-related variables.
-        self.data = DotDict({"base":os.path.join(self.base, "data"),})
+        self.data = DotDict({"base": os.path.join(self.base, "data"), })
         self.data.train = os.path.join(self.data.base, "train")
         self.data.validation = os.path.join(self.data.base, "validation")
         self.data.test = os.path.join(self.data.base, "test")
         # Check whether all data-related paths exists.
-        if not os.path.exists(self.data.train) or\
-           not os.path.exists(self.data.validation) or\
-           not os.path.exists(self.data.test):
+        if not os.path.exists(self.data.train) or \
+                not os.path.exists(self.data.validation) or \
+                not os.path.exists(self.data.test):
             shutil.rmtree(self.data.train, ignore_errors=True)
             shutil.rmtree(self.data.validation, ignore_errors=True)
             shutil.rmtree(self.data.test, ignore_errors=True)
@@ -50,7 +56,7 @@ class Paths:
         os.makedirs(self.data.validation, exist_ok=True)
         os.makedirs(self.data.test, exist_ok=True)
         # Initialize run-related variables.
-        self.run = DotDict({"base":None,"train":None,"model":None,"save":None,"script":None,})
+        self.run = DotDict({"base": None, "train": None, "model": None, "save": None, "script": None, })
         # Get current `date` for saving folder, and initialize current
         # `run` to create a new run folder within the current date.
         date, run = datetime.datetime.today().strftime("%Y-%m-%d"), 0
@@ -65,11 +71,14 @@ class Paths:
             # Update current `run`.
             run += 1
             # Once paths doesn't exist yet, create new folders.
-            if not os.path.exists(self.run.train) and\
-               not os.path.exists(self.run.model) and\
-               not os.path.exists(self.run.save):
-                os.makedirs(self.run.train); os.makedirs(self.run.model)
-                os.makedirs(self.run.save); os.makedirs(self.run.script); break
+            if not os.path.exists(self.run.train) and \
+                    not os.path.exists(self.run.model) and \
+                    not os.path.exists(self.run.save):
+                os.makedirs(self.run.train);
+                os.makedirs(self.run.model)
+                os.makedirs(self.run.save);
+                os.makedirs(self.run.script);
+                break
 
         ### Initialize other variables and configuration files.
         ## Initialize other run-related variables.
@@ -87,6 +96,7 @@ class Paths:
     """
     init run funcs
     """
+
     # def _init_run_name func
     def _init_run_name(self):
         """
@@ -107,13 +117,16 @@ class Paths:
         :return logger: Created logger object.
         """
         # Create new logger.
-        logger = logging.getLogger(name); logger.setLevel(logging.INFO)
+        logger = logging.getLogger(name)
+        logger.setLevel(logging.INFO)
         # Remove any existing handlers so you don't output to old files, or to
         # new files twice - important when resuming training exsiting model.
         logger.handlers = []
         # Create a file handler, and create a logging format.
-        handler = logging.FileHandler(os.path.join(path, name+".log")); handler.setLevel(logging.INFO)
-        formatter = logging.Formatter("%(asctime)s: %(message)s"); handler.setFormatter(formatter)
+        handler = logging.FileHandler(os.path.join(path, name + ".log"))
+        handler.setLevel(logging.INFO)
+        formatter = logging.Formatter("%(asctime)s: %(message)s")
+        handler.setFormatter(formatter)
         logger.addHandler(handler)
         # Return the logger object.
         return logger
@@ -124,25 +137,27 @@ class Paths:
         Copy scripts of current run to script path, which is saved in `script`.
         """
         # Initialize `ignore_dirs` & `ignore_patterns`.
-        ignore_dirs = ["data", "docs", "pretrains", "slurm", "summaries", "summaries-hpc",]
+        ignore_dirs = ["data", "docs", "pretrains", "slurm", "summaries", "summaries-hpc", ]
         ignore_patterns = [
             # dirs
             "__pycache__",
             # files
             "*.ipynb",
         ]
+
         # Define the rule of ignore.
         def ignore_func(dir_, files):
             # Get the current sub-directory level relative to the directory being copied.
             sub_level = dir_[len(self.base):].count(os.path.sep)
             # Filter out directories to ignore.
-            ignore_files = [file_i for file_i in files if os.path.isdir(os.path.join(dir_, file_i)) and\
-                (file_i in ignore_dirs) and (sub_level == 0)]
+            ignore_files = [file_i for file_i in files if os.path.isdir(os.path.join(dir_, file_i)) and \
+                            (file_i in ignore_dirs) and (sub_level == 0)]
             # Filter out file patterns to ignore.
-            ignore_files.extend([file_i for file_i in files if\
-                any([fnmatch.fnmatch(file_i, pattern_i) for pattern_i in ignore_patterns])])
+            ignore_files.extend([file_i for file_i in files if \
+                                 any([fnmatch.fnmatch(file_i, pattern_i) for pattern_i in ignore_patterns])])
             # Return the final `ignore_files`.
             return ignore_files
+
         # Copy scripts while ignoring the specified patterns.
         shutil.copytree(self.base, self.run.script, dirs_exist_ok=True, ignore=ignore_func)
 
@@ -156,6 +171,7 @@ class Paths:
     """
     static funcs
     """
+
     ## def pickle funcs
     # def save_pickle func
     @staticmethod
@@ -180,8 +196,8 @@ class Paths:
             obj = pickle.load(f)
         return obj
 
+
 if __name__ == "__main__":
-    import mne
     # local dep
     from params import lasso_regression_params
 
@@ -193,4 +209,3 @@ if __name__ == "__main__":
     params = lasso_regression_params()
     # Instantiate `Paths` object.
     paths_inst = Paths(base=base, params=params)
-

@@ -5,11 +5,13 @@ Created on 21:02, Feb. 14th, 2022
 @author: Norbert Zheng
 """
 import copy as cp
+
 import numpy as np
 
 __all__ = [
     "DotDict",
 ]
+
 
 class DotDict(dict):
 
@@ -35,6 +37,7 @@ class DotDict(dict):
     # def set func
     def __setitem__(self, k, v):
         dict.__setitem__(self, k, DotDict.dict2dotdict(v))
+
     __setattr__ = __setitem__
 
     # def del func
@@ -48,7 +51,8 @@ class DotDict(dict):
 
     """
     static funcs
-    """ 
+    """
+
     # def dict2dotdict func
     @staticmethod
     def dict2dotdict(obj):
@@ -114,7 +118,7 @@ class DotDict(dict):
                         key_i.insert(0, key)
                 # If `val` is not dict, then directly get its key.
                 else:
-                    keys_i = [[key,],]
+                    keys_i = [[key, ], ]
                 keys.extend(keys_i)
         # Return the final keys.
         return keys
@@ -129,8 +133,9 @@ class DotDict(dict):
         :return val: The value of query key.
         """
         key = cp.deepcopy(key)
-        if isinstance(key, str): key = [key,]
-        assert type(key) is list; val = obj
+        if isinstance(key, str): key = [key, ]
+        assert type(key) is list;
+        val = obj
         try:
             for _ in range(len(key)):
                 val = val.get(key.pop(0))
@@ -149,13 +154,14 @@ class DotDict(dict):
         :param val: The value of query key.
         """
         key = cp.deepcopy(key)
-        if isinstance(key, str): key = [key,]
+        if isinstance(key, str): key = [key, ]
         assert type(key) is list
-        for _ in range(len(key)-1):
+        for _ in range(len(key) - 1):
             key_i = key.pop(0)
             if not hasattr(obj, key_i): setattr(obj, key_i, DotDict())
             obj = getattr(obj, key_i)
-        key_i = key.pop(0); setattr(obj, key_i, val)
+        key_i = key.pop(0);
+        setattr(obj, key_i, val)
 
     # def dotdictlst2dotdict func
     @staticmethod
@@ -167,7 +173,8 @@ class DotDict(dict):
         :return dotdict: The `DotDict` of list, each of which has the same shape.
         """
         # Check whether every item in dotdictlst has the same iter_keys.
-        assert len(dotdictlst) > 0; assert isinstance(dotdictlst[0], DotDict)
+        assert len(dotdictlst) > 0;
+        assert isinstance(dotdictlst[0], DotDict)
         keys = DotDict.iter_keys(dotdictlst[0])
         for item in dotdictlst:
             assert keys == DotDict.iter_keys(item)
@@ -178,7 +185,7 @@ class DotDict(dict):
             # For the first item, simply copy the components.
             if not dotdict.keys():
                 for key in keys:
-                    DotDict.iter_setattr(dotdict, key, [DotDict.iter_getattr(item, key),])
+                    DotDict.iter_setattr(dotdict, key, [DotDict.iter_getattr(item, key), ])
             # For all next items, add the components to the existing list.
             else:
                 for key in keys:
@@ -198,7 +205,8 @@ class DotDict(dict):
         """
         # Check whether every item dotdict has the same shape.
         assert isinstance(dotdict, DotDict)
-        n_iters = None; keys = DotDict.iter_keys(dotdict)
+        n_iters = None;
+        keys = DotDict.iter_keys(dotdict)
         for key in keys:
             if not n_iters:
                 n_iters = len(DotDict.iter_getattr(dotdict, key))
@@ -237,13 +245,14 @@ class DotDict(dict):
         # Return the final numpydict.
         return numpydict
 
+
 if __name__ == "__main__":
     # Instantiate DotDict.
     dotdict_inst = DotDict({
         "a": 1, "b": 2, "c": DotDict({
             "d": 3, "e": 4, "f": DotDict({
                 "g": 5, "h": 6
-    })})})
+            })})})
     # dotdict2dict.
     dotdict_inst = DotDict.dotdict2dict(dotdict_inst)
     # dict2dotdict.
@@ -254,12 +263,11 @@ if __name__ == "__main__":
     iter_getattr = DotDict.iter_getattr(dotdict_inst, iter_keys[-1])
 
     # Initialize DotDict list.
-    dotdictlst = [DotDict({"a":1,"b":2,"c":{"d":5,"e":6}}),
-        DotDict({"a":3,"b":4,"c":{"d":7,"e":8}})]
+    dotdictlst = [DotDict({"a": 1, "b": 2, "c": {"d": 5, "e": 6}}),
+                  DotDict({"a": 3, "b": 4, "c": {"d": 7, "e": 8}})]
     # Convert dotdictlst to dotdict.
     dotdict = DotDict.dotdictlst2dotdict(dotdictlst)
     # Convert dotdict to dotdictlst.
     dotdictlst = DotDict.dotdict2dotdictlst(dotdict)
     # Convert dotdict to numpydict.
     numpydict = DotDict.dotdict2numpydict(dotdict)
-
